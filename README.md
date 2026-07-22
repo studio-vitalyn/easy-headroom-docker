@@ -1,9 +1,5 @@
 # docker-easy-headroom
 
-> **Not started yet.** This repo currently contains only the design
-> spec (see [CLAUDE.md](./CLAUDE.md)) — no `docker-compose.yml`, no
-> services, nothing to deploy yet.
-
 Docker bundle to self-host a centralized [Headroom](https://github.com/headroomlabs-ai/headroom)
 instance plus an RTK savings aggregation service, so a whole team can
 share one Headroom proxy — and see everyone's [RTK](https://github.com/rtk-ai/rtk)
@@ -15,15 +11,27 @@ the VS Code extension most devs on the team will actually use day to
 day. It can point at this bundle via its `remote` mode instead of
 spawning a local Headroom proxy.
 
-## Planned quick start
+## Services
 
-1. `cp .env.example .env`, then set a real `HEADROOM_PROXY_TOKEN`.
+- **`easy-headroom-proxy`** — the Headroom API proxy (compression,
+  cache, output shaping). No published port; reachable only on the
+  internal Compose network.
+- **`easy-headroom-learner`** — Headroom's background learning worker
+  (`headroom learn --apply`), sharing the same data/cache volumes as
+  the proxy.
+- **`easy-headroom`** — the only public entrypoint. Handles `/rtk/*`
+  (RTK savings ingestion/aggregation) itself and reverse-proxies
+  everything else (dashboard, compressed API traffic) to
+  `easy-headroom-proxy`.
+
+## Quick start
+
+1. `cp .env.example .env`, then set a real `HEADROOM_PROXY_TOKEN`
+   (e.g. `openssl rand -hex 32`).
 2. `docker compose up -d --build`.
-3. Grab the exposed URL — a single port, `http://<host>:8787`, serves
-   both Headroom (dashboard, compressed API proxy) and RTK ingestion
-   (`/rtk/*`) — and the token. `easy-headroom-proxy` itself has no
-   published port; `easy-headroom` is the only public entrypoint and
-   proxies everything else through to it.
+3. Grab the exposed URL — a single port, `http://<host>:8787` by
+   default (`EASY_HEADROOM_PORT` in `.env`), serves both Headroom
+   (dashboard, compressed API proxy) and RTK ingestion (`/rtk/*`).
 4. Give the URL and token to every dev for their `easy-headroom`
    extension settings (`headroom.mode=remote`, `headroom.remoteUrl`,
    `headroom.proxyToken`). RTK stats reporting targets
