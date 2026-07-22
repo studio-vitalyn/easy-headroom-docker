@@ -1,15 +1,15 @@
 # docker-easy-headroom
 
 Docker bundle to self-host a centralized [Headroom](https://github.com/headroomlabs-ai/headroom)
-instance plus an RTK savings aggregation service, so a whole team can
-share one Headroom proxy — and see everyone's [RTK](https://github.com/rtk-ai/rtk)
-savings rolled up into a single dashboard — instead of each dev running
-their own local instance.
+instance plus an RTK savings aggregation service, so multiple hosts can
+share one Headroom proxy — and see [RTK](https://github.com/rtk-ai/rtk)
+savings from every host rolled up into a single dashboard — instead of
+each host running its own local instance.
 
 Companion project: [`easy-headroom`](https://github.com/studio-vitalyn/easy-headroom-vscode) —
-the VS Code extension most devs on the team will actually use day to
-day. It can point at this bundle via its `remote` mode instead of
-spawning a local Headroom proxy.
+the VS Code extension you'd run on each of those hosts day to day. It
+can point at this bundle via its `remote` mode instead of spawning a
+local Headroom proxy.
 
 ## Services
 
@@ -32,7 +32,7 @@ spawning a local Headroom proxy.
 3. Grab the exposed URL — a single port, `http://<host>:8787` by
    default (`EASY_HEADROOM_PORT` in `.env`), serves both Headroom
    (dashboard, compressed API proxy) and RTK ingestion (`/rtk/*`).
-4. Give the URL and token to every dev for their `easy-headroom`
+4. Give the URL and token to each host's `easy-headroom`
    extension settings (`headroom.mode=remote`, `headroom.remoteUrl`,
    `headroom.proxyToken`). RTK stats reporting targets
    `headroom.remoteUrl/rtk/ingest` automatically.

@@ -7,8 +7,9 @@ ingest service now exist with a first working cut.
 Optional Docker bundle to self-host a **centralized Headroom instance**
 (API compression proxy + cache + output shaping) shared across multiple
 machines/containers, plus a small **RTK savings aggregation service** —
-for teams, as opposed to the "one dev, one machine" usage pattern that
-both the official Headroom desktop app and CLI target on their own.
+for multi-host setups, as opposed to the "one dev, one machine" usage
+pattern that both the official Headroom desktop app and CLI target on
+their own.
 
 ## Companion project
 
@@ -18,8 +19,9 @@ installs and configures RTK and/or Headroom per machine, and can point
 at this bundle instead of running its own local Headroom proxy
 (`easy-headroom.headroom.mode = remote`,
 `easy-headroom.headroom.remoteUrl = <this bundle's URL>`). A solo dev
-only needs `easy-headroom` (local mode) — this bundle is only relevant
-for teams who want a shared Headroom instance.
+on one machine only needs `easy-headroom` (local mode) — this bundle is
+only relevant when running Headroom across multiple hosts, to aggregate
+their RTK savings onto one dashboard.
 
 ## Context / why this project exists
 
@@ -27,12 +29,12 @@ RTK (shell output compression, runs locally on each dev's machine) and
 Headroom (API compression proxy + cache + output shaping) are two
 complementary but independent tools. Headroom's proxy can already be
 pointed at from multiple machines (it's just an HTTP proxy), but there
-is no ready-to-deploy bundle for teams, and no way to aggregate RTK's
-*local-only* savings stats (RTK has no server component, by design —
-it can't run remotely without losing its whole point) into one shared
-view. This repo fills that gap: a Docker bundle that self-hosts
-Headroom plus a small aggregation service, so every dev's RTK savings
-roll up into one shared dashboard.
+is no ready-to-deploy bundle for multi-host setups, and no way to
+aggregate RTK's *local-only* savings stats (RTK has no server
+component, by design — it can't run remotely without losing its whole
+point) into one shared view. This repo fills that gap: a Docker bundle
+that self-hosts Headroom plus a small aggregation service, so every
+host's RTK savings roll up into one shared dashboard.
 
 ## Architecture: single public entrypoint
 
@@ -63,7 +65,7 @@ network) — it is not reachable from outside the Docker host at all.
   issue already fixed client-side for `local` mode in the VS Code
   extension's dashboard proxy (`commands.ts`).
 
-This means a team only needs to open one port to reach the whole
+This means only one port needs to be opened to reach the whole
 bundle, and `easy-headroom-proxy` never needs direct network exposure.
 
 ## Components
@@ -90,7 +92,7 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
 
 **`easy-headroom` (service, Node.js — the rtk-ingest aggregator + reverse proxy)**
 - Compose service name is `easy-headroom` on purpose (this is the
-  bundle's public-facing component for the team); routes are
+  bundle's public-facing component); routes are
   namespaced under `/rtk/*` so unrelated future routes stay separate,
   everything else is reverse-proxied to `easy-headroom-proxy` — see
   "Architecture: single public entrypoint" above.
@@ -235,7 +237,7 @@ docker-easy-headroom/
 │   ├── Dockerfile
 │   ├── package.json
 │   └── server.js
-└── README.md                  (deployment instructions for the team)
+└── README.md                  (deployment instructions)
 ```
 
 ## What the README should explain to the end user
@@ -245,7 +247,7 @@ docker-easy-headroom/
 3. Grab the exposed URL — a single port, `http://<host>:8787`, for
    both Headroom (dashboard, API proxy) and RTK ingestion (`/rtk/*`)
    — and the API key.
-4. Give both to every dev on the team for their `easy-headroom`
+4. Give both to each host for its `easy-headroom`
    extension configuration (`headroom.mode=remote`,
    `headroom.remoteUrl`, `headroom.proxyToken`). RTK stats reporting
    targets `headroom.remoteUrl/rtk/ingest` automatically — there is no
