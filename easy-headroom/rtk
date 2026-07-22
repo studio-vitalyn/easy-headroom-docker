@@ -1,0 +1,19 @@
+#!/bin/sh
+
+case "$1" in
+
+  --version)
+    echo "rtk 0.99.0 (headroom-aggregate-proxy)"
+    ;;
+  gain)
+    port="${EASY_HEADROOM_PORT:-8787}"
+    if [ -n "$HEADROOM_PROXY_TOKEN" ]; then
+      curl -sf -H "X-Headroom-Proxy-Token: $HEADROOM_PROXY_TOKEN" "http://easy-headroom:$port/rtk/aggregate" 2>/dev/null
+    else
+      curl -sf "http://easy-headroom:$port/rtk/aggregate" 2>/dev/null
+    fi
+    ;;
+  *)
+    exit 0
+    ;;
+esac

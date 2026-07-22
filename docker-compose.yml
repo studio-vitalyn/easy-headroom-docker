@@ -1,0 +1,74 @@
+# to rebuild headroom using latest:
+# docker compose build --no-cache easy-headroom-proxy easy-headroom-learner
+# docker compose up -d
+
+services:
+  easy-headroom-proxy:
+    build:
+      context: ./headroom
+      dockerfile: Dockerfile
+    container_name: easy-headroom-proxy
+    command: ["proxy", "--host", "0.0.0.0", "--port", "8787"]
+    environment:
+      - HEADROOM_HOST=0.0.0.0
+      - HOME=/home/nonroot
+      # Keep all Headroom read/write state on the named volume below.
+      - HEADROOM_WORKSPACE_DIR=/home/nonroot/.headroom
+      - HEADROOM_CONFIG_DIR=/home/nonroot/.headroom/config
+      - HEADROOM_OUTPUT_SHAPER=1
+      # Gates this service's own /v1/* routes on the internal Compose network (it has no
+      # published port, but any other container on the network could otherwise reach it
+      # unauthenticated) via Headroom's own native check on the X-Headroom-Proxy-Token header
+      # (or Authorization: Bearer) — read straight off whatever the original caller sent.
+      # easy-headroom never injects this itself (see server.js); it's the caller's job (Claude
+      # Code via ANTHROPIC_CUSTOM_HEADERS, or the VS Code extension's local dashboard proxy — see
+      # docker/CLAUDE.md). Also read by the rtk wrapper (mounted below) to authenticate its own
+      # call to easy-headroom's /rtk/aggregate.
+      - HEADROOM_PROXY_TOKEN=${HEADROOM_PROXY_TOKEN:-}
+      # Read by the rtk wrapper (mounted below) to reach easy-headroom on the internal network.
+      - EASY_HEADROOM_PORT=${EASY_HEADROOM_PORT:-8787}
+      # Uncomment and configure if needed (or use a .env file with env_file)
+      # - OPENAI_TARGET_API_URL=https://api.x.ai
+    # No "ports:" here: this service stays on the internal Docker network only.
+    # easy-headroom (published on port 8787) is the one that exposes everything
+    # publicly and proxies to this container for anything that isn't /rtk/*.
+    expose:
+      - "8787"
+    volumes:
+      # Keep local folders for data and cache
+      - ./easy-headroom/rtk:/usr/bin/rtk
+      - ./headroom_data:/home/nonroot/.headroom
+      - ./headroom_cache:/home/nonroot/.cache
+
+  # The learning worker
+  easy-headroom-learner:
+    build:
+      context: ./headroom
+      dockerfile: Dockerfile
+    container_name: easy-headroom-learner
+    command: ["learn", "--verbosity", "--apply"]
+    environment:
+      - HEADROOM_HOST=0.0.0.0
+      - HEADROOM_OUTPUT_SHAPER=1
+      - TZ=Europe/Paris
+    volumes:
+      - ./headroom_data:/home/nonroot/.headroom
+      - ./headroom_cache:/home/nonroot/.cache
+
+  # Only public entrypoint of the bundle: serves /rtk/* (RTK savings aggregation, formerly
+  # rtk-ingest) and proxies everything else to easy-headroom-proxy (dashboard, compressed API, etc.).
+  easy-headroom:
+    build: ./easy-headroom
+    container_name: easy-headroom
+    environment:
+      # Only gates this service's own /rtk/* routes (X-Headroom-Proxy-Token header) — never
+      # injected into anything proxied to easy-headroom-proxy, see server.js.
+      - HEADROOM_PROXY_TOKEN=${HEADROOM_PROXY_TOKEN:-}
+      - HEADROOM_TARGET=http://easy-headroom-proxy:8787
+      - PORT=${EASY_HEADROOM_PORT:-8787}
+    volumes:
+      - ./headroom_data/rtk:/data/rtk
+    ports:
+      - "${EASY_HEADROOM_PORT:-8787}:${EASY_HEADROOM_PORT:-8787}"
+    depends_on:
+      - easy-headroom-proxy
