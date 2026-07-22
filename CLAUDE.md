@@ -165,10 +165,6 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
   pass-through avoids that collision entirely; every caller that needs
   the gate token sends it itself. Anyone holding the token is already a
   trusted dev, so a separate internal-only secret would gate no one out.
-- Optionally also serves `easy-headroom`'s `.vsix` releases
-  (`GET /extension/latest.json` → `{ version, url }`, static files
-  under `/extension/`), to reuse existing infra instead of standing up
-  a third service.
 
 ## RTK data model
 
