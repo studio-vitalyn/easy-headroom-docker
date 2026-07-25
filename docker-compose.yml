@@ -8,7 +8,7 @@ services:
       context: ./headroom
       dockerfile: Dockerfile
     container_name: easy-headroom-proxy
-    command: ["proxy", "--host", "0.0.0.0", "--port", "8787"]
+    command: ["proxy", "--host", "0.0.0.0", "--port", "8787", "--memory"]
     environment:
       - HEADROOM_HOST=0.0.0.0
       - HOME=/home/nonroot
