@@ -122,6 +122,15 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
   "all projects" breakdown table (see `vscode/CLAUDE.md`) doesn't need
   N extra `/rtk/aggregate?project=...` calls to render itself; also
   backs that tab's project picker.
+- Mirrors that whole `/rtk/*` design one-for-one under `/tokensave/*`,
+  backed by the same SQLite file's `savings` table (see "TokenSave data
+  model" below), not a separate DB: `POST /tokensave/ingest` (`{
+  instance_id, id_project, rows }`, same idempotent `INSERT OR IGNORE`
+  on `(instance_id, id)`), `GET /tokensave/checkpoint?instance_id=...`
+  → `{ last_id }`, `GET /tokensave/aggregate` (optionally `?project=`)
+  → live-computed `{ summary, daily, weekly, monthly }`, and
+  `GET /tokensave/projects` → `{ projects: [{ id_project, calls,
+  before_tokens, after_tokens, saved_tokens, avg_savings_pct }] }`.
 - Protected by a single token, `HEADROOM_PROXY_TOKEN` (passed through
   `docker-compose.yml` via `${HEADROOM_PROXY_TOKEN:-}`), read from
   `.env`. If unset or empty, auth is simply disabled (open access)
@@ -132,8 +141,9 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
   `Authorization: Bearer`), sent by whoever's calling — **`easy-headroom`
   itself never injects this header into proxied traffic, under any
   path, for any caller**:
-  - end users calling `/rtk/*` send it as `X-Headroom-Proxy-Token`,
-    checked by `easy-headroom` itself (`requireApiKey` in `server.js`);
+  - end users calling `/rtk/*` or `/tokensave/*` send it as
+    `X-Headroom-Proxy-Token`, checked by `easy-headroom` itself
+    (`requireApiKey` in `server.js`);
   - the `rtk` wrapper forwards the same env var as that header when
     calling `/rtk/aggregate`;
   - everything else — the real proxied Anthropic API traffic under
@@ -223,6 +233,56 @@ true ISO week) and reports `week_start`/`week_end` as the min/max
 *observed* command date within that bucket, not the calendar week's
 actual boundaries. Fine for a trend view, not for exact
 billing-period reporting.
+
+## TokenSave data model
+
+TokenSave's remote reporting mirrors RTK's incremental-push design
+one-for-one (see "RTK data model" above), reusing the same identity/
+checkpoint conventions and the same `/data/rtk/aggregate.db` SQLite
+file — just a different table (`savings`, not `commands`).
+
+**Client identity.** Same random-UUID `instance_id` mechanism as RTK,
+persisted next to TokenSave's own global DB rather than
+`history.db`'s: `.easy-headroom-instance-id`/
+`.easy-headroom-last-pushed-id` beside `~/.tokensave/global.db` (a
+fixed path, unlike RTK's OS-varying `history.db` — see
+`tokensaveGlobalDbPath()`/`tokensaveInstanceIdPath()`/
+`tokensaveLastPushedIdPath()` in `vscode/src/paths.ts`).
+
+**Incremental push, not snapshots — with one caveat RTK doesn't have.**
+`vscode/src/tokensaveReporting.ts`'s `TokensaveReportingWatcher`
+otherwise mirrors `RtkReportingWatcher` exactly (`fs.watch` + debounce,
+`GET /tokensave/checkpoint` reconciled once at startup, batched
+`POST /tokensave/ingest`, 500 rows/batch). The difference: RTK is a
+short-lived per-invocation CLI whose WAL auto-checkpoints cleanly
+between commands, so reading its raw `.db` file is always safe.
+TokenSave's `global.db` is instead held open long-term (e.g. by a
+running `tokensave serve` MCP process), so a raw read (`sql.js`, in
+`tokensaveDb.ts`'s `readSavingsSince()`) can lag the live WAL by up to
+SQLite's default autocheckpoint threshold (~1000 pages/~4MB) —
+confirmed empirically to undercount by ~15% against a WAL-aware read.
+Bounded, self-resolving staleness (the next autocheckpoint catches it
+up), not data loss — not worth a live-connection read just to close
+that gap.
+
+**`id_project`.** Same `projectSlug()` source as RTK, sent once per
+ingest batch rather than per row.
+
+**Schema** (`savings` table, same DB file as `commands`, not a
+separate one): `instance_id, id, id_project, ts, project_path,
+tool_name, before_tokens, after_tokens`, primary key
+`(instance_id, id)`, indexed on `id_project` and `instance_id`.
+Deliberately no `saved_tokens`/`savings_pct` columns — always derived
+server-side (`withSavingsDerived`), the same principle as
+`commands.savings_pct` (`withDerived`), never trusted from the client.
+`ts` is INTEGER unix seconds, unlike `commands.timestamp` (TEXT), so
+every date/time grouping query uses SQLite's `'unixepoch'` modifier
+(`date(ts, 'unixepoch')`, `strftime('%Y-%W', ts, 'unixepoch')`,
+`strftime('%Y-%m', ts, 'unixepoch')`) instead of the plain
+`date(timestamp)`/`strftime(..., timestamp)` RTK's queries use.
+
+**Weekly buckets are approximate**, same caveat and same reason as
+RTK's above.
 
 ## Expected files
 

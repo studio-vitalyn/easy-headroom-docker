@@ -31,6 +31,28 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_commands_project ON commands(id_project);
   CREATE INDEX IF NOT EXISTS idx_commands_instance ON commands(instance_id);
+
+  -- TokenSave's remote-reporting counterpart to \`commands\` above, same
+  -- (instance_id, id) idempotent-upsert design — see vscode/src/tokensaveReporting.ts
+  -- and "TokenSave data model" in docker/CLAUDE.md. No saved_tokens/savings_pct columns:
+  -- the client's local ledger (savings_ledger) only ever has before/after_tokens, so those are
+  -- always derived here (before_tokens - after_tokens), same as \`commands\`.savings_pct is derived
+  -- via withDerived rather than trusted from the client. \`ts\` is INTEGER unix seconds (unlike
+  -- \`commands\`.timestamp, which is TEXT) — every date/time query below uses SQLite's 'unixepoch'
+  -- modifier accordingly.
+  CREATE TABLE IF NOT EXISTS savings (
+    instance_id TEXT NOT NULL,
+    id INTEGER NOT NULL,
+    id_project TEXT NOT NULL,
+    ts INTEGER,
+    project_path TEXT,
+    tool_name TEXT,
+    before_tokens INTEGER NOT NULL DEFAULT 0,
+    after_tokens INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (instance_id, id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_savings_project ON savings(id_project);
+  CREATE INDEX IF NOT EXISTS idx_savings_instance ON savings(instance_id);
 `);
 
 // Gates /rtk/* against end users, using the same header Headroom's own proxy natively accepts
@@ -142,6 +164,87 @@ function aggregate(project) {
   };
 }
 
+// TokenSave's own aggregation, mirroring the RTK functions above one-for-one — see "TokenSave
+// data model" in docker/CLAUDE.md. `savings` has no saved_tokens/savings_pct columns (the client's
+// local ledger only ever has before/after_tokens), so both are always derived here rather than
+// trusted from the client, and every date/time grouping uses SQLite's 'unixepoch' modifier since
+// `ts` is an INTEGER unix timestamp (unlike `commands.timestamp`, which is TEXT).
+function withSavingsDerived(rows) {
+  return rows.map((r) => {
+    const saved_tokens = r.before_tokens - r.after_tokens;
+    return {
+      ...r,
+      saved_tokens,
+      savings_pct: r.before_tokens > 0 ? (saved_tokens / r.before_tokens) * 100 : 0,
+    };
+  });
+}
+
+function computeSavingsSummary(project) {
+  const { where, params } = projectFilter(project);
+  const row = db.prepare(`
+    SELECT COUNT(*) AS calls,
+           COALESCE(SUM(before_tokens), 0) AS before_tokens,
+           COALESCE(SUM(after_tokens), 0) AS after_tokens
+    FROM savings ${where}
+  `).get(...params);
+  return withSavingsDerived([row])[0];
+}
+
+function computeSavingsDaily(project) {
+  const { where, params } = projectFilter(project);
+  const rows = db.prepare(`
+    SELECT date(ts, 'unixepoch') AS date,
+           COUNT(*) AS calls,
+           COALESCE(SUM(before_tokens), 0) AS before_tokens,
+           COALESCE(SUM(after_tokens), 0) AS after_tokens
+    FROM savings ${where}
+    GROUP BY date
+    ORDER BY date ASC
+  `).all(...params);
+  return withSavingsDerived(rows);
+}
+
+// Same Sunday-start-week/observed-boundary caveat as computeWeekly above.
+function computeSavingsWeekly(project) {
+  const { where, params } = projectFilter(project);
+  const rows = db.prepare(`
+    SELECT strftime('%Y-%W', ts, 'unixepoch') AS week,
+           MIN(date(ts, 'unixepoch')) AS week_start,
+           MAX(date(ts, 'unixepoch')) AS week_end,
+           COUNT(*) AS calls,
+           COALESCE(SUM(before_tokens), 0) AS before_tokens,
+           COALESCE(SUM(after_tokens), 0) AS after_tokens
+    FROM savings ${where}
+    GROUP BY week
+    ORDER BY week ASC
+  `).all(...params);
+  return withSavingsDerived(rows).map(({ week, ...rest }) => rest);
+}
+
+function computeSavingsMonthly(project) {
+  const { where, params } = projectFilter(project);
+  const rows = db.prepare(`
+    SELECT strftime('%Y-%m', ts, 'unixepoch') AS month,
+           COUNT(*) AS calls,
+           COALESCE(SUM(before_tokens), 0) AS before_tokens,
+           COALESCE(SUM(after_tokens), 0) AS after_tokens
+    FROM savings ${where}
+    GROUP BY month
+    ORDER BY month ASC
+  `).all(...params);
+  return withSavingsDerived(rows);
+}
+
+function aggregateSavings(project) {
+  return {
+    summary: computeSavingsSummary(project),
+    daily: computeSavingsDaily(project),
+    weekly: computeSavingsWeekly(project),
+    monthly: computeSavingsMonthly(project),
+  };
+}
+
 // Deliberately no original_cmd/rtk_cmd columns: the client (rtkDb.ts) never reads or sends
 // actual shell command text, only stats — see the "never transmit shell command content" rule
 // in vscode/CLAUDE.md, the same boundary rtk gain's own summary output already respected.
@@ -164,6 +267,29 @@ const insertRows = db.transaction((instanceId, idProject, rows) => {
       savings_pct: row.savings_pct ?? 0,
       exec_time_ms: row.exec_time_ms ?? 0,
       project_path: row.project_path ?? null,
+    });
+  }
+});
+
+// Same "no raw content leaves the client" boundary as `insertStmt` above: `tool_name` is an MCP
+// tool name (metadata), not query/command content — see vscode/src/tokensaveDb.ts.
+const insertSavingsStmt = db.prepare(`
+  INSERT OR IGNORE INTO savings
+    (instance_id, id, id_project, ts, project_path, tool_name, before_tokens, after_tokens)
+  VALUES
+    (@instance_id, @id, @id_project, @ts, @project_path, @tool_name, @before_tokens, @after_tokens)
+`);
+const insertSavingsRows = db.transaction((instanceId, idProject, rows) => {
+  for (const row of rows) {
+    insertSavingsStmt.run({
+      instance_id: instanceId,
+      id: row.id,
+      id_project: idProject,
+      ts: row.ts ?? null,
+      project_path: row.project_path ?? null,
+      tool_name: row.tool_name ?? null,
+      before_tokens: row.before_tokens ?? 0,
+      after_tokens: row.after_tokens ?? 0,
     });
   }
 });
@@ -222,6 +348,59 @@ rtk.get('/projects', requireApiKey, (req, res) => {
 });
 
 app.use('/rtk', rtk);
+
+// TokenSave's own router, mirroring the `rtk` router above one-for-one — see "TokenSave data
+// model" in docker/CLAUDE.md. Body-parsing scoped the same way, for the same reason.
+const tokensave = express.Router();
+tokensave.use(express.json({ limit: '5mb' }));
+
+// Raw per-call rows straight from the client's TokenSave global.db `savings_ledger` table
+// (see vscode/src/tokensaveReporting.ts) — not a pre-aggregated summary.
+tokensave.post('/ingest', requireApiKey, (req, res) => {
+  const { instance_id, id_project, rows } = req.body;
+  if (!instance_id || !id_project || !Array.isArray(rows)) {
+    return res.status(400).json({ error: 'bad payload' });
+  }
+  insertSavingsRows(instance_id, id_project, rows);
+  res.json({ ok: true });
+});
+
+// Same reconciliation purpose as GET /rtk/checkpoint — see that handler's comment.
+tokensave.get('/checkpoint', requireApiKey, (req, res) => {
+  const instanceId = req.query.instance_id;
+  if (!instanceId) return res.status(400).json({ error: 'instance_id required' });
+  const row = db.prepare('SELECT MAX(id) AS last_id FROM savings WHERE instance_id = ?').get(instanceId);
+  res.json({ last_id: row.last_id ?? 0 });
+});
+
+// Backs the TokenSave dashboard tab's remote-mode stats fetch. Optional ?project=<id_project>
+// scopes every field to one project instead of all of them.
+tokensave.get('/aggregate', requireApiKey, (req, res) => res.json(aggregateSavings(req.query.project)));
+
+// Backs the TokenSave dashboard tab's project picker — full per-project sums, mirroring
+// GET /rtk/projects, field-named to match vscode/src/tokensaveStats.ts's TokensaveProjectSummary.
+tokensave.get('/projects', requireApiKey, (req, res) => {
+  const rows = db.prepare(`
+    SELECT id_project,
+           COUNT(*) AS calls,
+           COALESCE(SUM(before_tokens), 0) AS before_tokens,
+           COALESCE(SUM(after_tokens), 0) AS after_tokens
+    FROM savings
+    GROUP BY id_project
+    ORDER BY calls DESC
+  `).all();
+  const projects = rows.map((r) => {
+    const saved_tokens = r.before_tokens - r.after_tokens;
+    return {
+      ...r,
+      saved_tokens,
+      avg_savings_pct: r.before_tokens > 0 ? (saved_tokens / r.before_tokens) * 100 : 0,
+    };
+  });
+  res.json({ projects });
+});
+
+app.use('/tokensave', tokensave);
 
 // Everything else (dashboard, proxied Anthropic API, etc.): only this service is
 // publicly exposed, easy-headroom-proxy stays on the internal Docker network (see docker-compose.yml).
