@@ -8,6 +8,7 @@ services:
       context: ./headroom
       dockerfile: Dockerfile
     container_name: easy-headroom-proxy
+    restart: unless-stopped
     command: ["proxy", "--host", "0.0.0.0", "--port", "8787", "--memory"]
     environment:
       - HEADROOM_HOST=0.0.0.0
@@ -46,6 +47,7 @@ services:
       context: ./headroom
       dockerfile: Dockerfile
     container_name: easy-headroom-learner
+    restart: unless-stopped
     command: ["learn", "--verbosity", "--apply"]
     environment:
       - HEADROOM_HOST=0.0.0.0
@@ -60,6 +62,7 @@ services:
   easy-headroom:
     build: ./easy-headroom
     container_name: easy-headroom
+    restart: unless-stopped
     environment:
       # Only gates this service's own /rtk/* routes (X-Headroom-Proxy-Token header) — never
       # injected into anything proxied to easy-headroom-proxy, see server.js.
