@@ -3,3 +3,5 @@
 .*~
 node_modules/
 .tokensave/
+headroom_cache/
+headroom_data/
