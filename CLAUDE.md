@@ -112,10 +112,27 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
   actually runs the commands).
 
 **`easy-headroom` (service, Node.js — the rtk-ingest aggregator + reverse proxy)**
-- Published to `ghcr.io/studio-vitalyn/easy-headroom:latest` by
-  `.github/workflows/publish-image.yml` on every push to `main` that
-  touches `easy-headroom/**` (`GITHUB_TOKEN` + `packages: write`, no
-  secret to provision). `docker-compose.yml` declares both `image:` and
+- Published to `ghcr.io/studio-vitalyn/easy-headroom` by
+  `.github/workflows/publish-image.yml` (`GITHUB_TOKEN` +
+  `packages: write`, no secret to provision). Tag scheme, deliberately
+  the same as the upstream Headroom image's so both halves of the
+  bundle are pinned the same way: `latest` = newest published GitHub
+  Release, `X.Y.Z`/`X.Y` = that release, `main` = branch tip,
+  `sha-<short>` = every build. **Publishing a release is the release
+  process**: `gh release create v0.2.0` creates the tag, fires the
+  workflow and moves `latest`; a plain push to `main` only moves `main`
+  and `sha-*`.
+  - The release trigger is `release: types: [published]`, *not*
+    `push: tags:`. GitHub evaluates the workflow's `paths:` filter
+    against tag pushes too, where the pushed-commit list is empty, so a
+    tag would silently never build. The `release` event sidesteps that.
+  - `org.opencontainers.image.{title,description,licenses}` are set
+    explicitly in `metadata-action`: inferred from the repo they come
+    out as `easy-headroom-docker` (the repo name, not this image), an
+    empty description, and `NOASSERTION`.
+    `org.opencontainers.image.source` is inferred correctly and is what
+    links the GHCR package back to this repo.
+- `docker-compose.yml` declares both `image:` and
   `build:`, so `docker compose pull` uses the published image while
   `docker compose up -d --build easy-headroom` still rebuilds from
   source during development. Built for `linux/amd64` only —
@@ -319,6 +336,7 @@ RTK's above.
 ```
 docker-easy-headroom/
 ├── docker-compose.yml
+├── docker-compose.override.yml  (per-host, gitignored, never committed — see below)
 ├── .env.example              (HEADROOM_PROXY_TOKEN=change-me)
 ├── .github/workflows/
 │   └── publish-image.yml     (builds + pushes ghcr.io/studio-vitalyn/easy-headroom)
@@ -332,6 +350,12 @@ docker-easy-headroom/
 
 There is deliberately **no `headroom/` folder**: that service runs the
 upstream image directly (see Components above).
+
+**Never edit the tracked `docker-compose.yml` on a deployment host** —
+`git pull` then refuses to merge over the local changes. Per-host
+tweaks go in a gitignored `docker-compose.override.yml`, which Compose
+merges automatically with no extra flag; anything already parameterised
+(token, port, image tags, `TZ`) goes in `.env` instead.
 
 ## What the README should explain to the end user
 

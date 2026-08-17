@@ -1,4 +1,7 @@
 .env
+# Per-host tweaks belong here, not in the tracked docker-compose.yml — Compose merges it
+# automatically, so `git pull` never conflicts with local edits.
+docker-compose.override.yml
 *~
 .*~
 node_modules/

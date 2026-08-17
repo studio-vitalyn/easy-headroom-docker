@@ -46,12 +46,45 @@ docker compose pull && docker compose up -d
 Nothing is built locally: the two Headroom services run the official
 upstream image (`ghcr.io/headroomlabs-ai/headroom`) as-is, and the
 `easy-headroom` service is published to
-`ghcr.io/studio-vitalyn/easy-headroom`. Pin either one from `.env`
-(`HEADROOM_IMAGE_TAG`, `EASY_HEADROOM_TAG`) if you'd rather not track
-`latest`.
+`ghcr.io/studio-vitalyn/easy-headroom`.
+
+Both default to `latest` and both understand the same tag scheme, so
+you can pin either one from `.env` if you'd rather not track a moving
+tag:
+
+| Tag | Points at |
+|---|---|
+| `latest` | newest release (the default) |
+| `X.Y.Z`, `X.Y` | that specific release |
+| `main` | tip of the `main` branch, `easy-headroom` only |
+| `sha-<short>` | one exact build |
+
+```sh
+# .env
+HEADROOM_IMAGE_TAG=0.35-code-nonroot
+EASY_HEADROOM_TAG=0.1
+```
 
 To rebuild the `easy-headroom` service from source while hacking on it,
 `docker compose up -d --build easy-headroom` still works.
+
+## Local tweaks
+
+Don't edit the tracked `docker-compose.yml` — the next `git pull` will
+refuse to merge over it. Put per-host changes in a
+`docker-compose.override.yml` next to it instead; Compose loads and
+merges it automatically, with no extra flag, and it's gitignored:
+
+```yaml
+# docker-compose.override.yml
+services:
+  easy-headroom-proxy:
+    environment:
+      OPENAI_TARGET_API_URL: https://api.x.ai
+```
+
+Anything that's already a variable (token, port, image tags, timezone)
+belongs in `.env` rather than an override.
 
 See [CLAUDE.md](./CLAUDE.md) for the full design spec.
 

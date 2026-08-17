@@ -3,10 +3,22 @@ name: Publish easy-headroom image
 # Builds the Node service (the RTK/TokenSave aggregator + reverse proxy) and pushes it to
 # GHCR, so deployments can `docker compose pull` instead of building it locally.
 #
-# One manual step is needed after the very first successful run: GHCR creates the package
-# as *private* even from a public repo. Flip it at
-# Packages -> easy-headroom -> Package settings -> Change visibility -> Public,
-# otherwise `docker compose pull` fails with a 401 for anyone not `docker login`-ed.
+# Tag scheme (mirrors what the upstream Headroom image does, so both halves of the bundle
+# behave the same way):
+#   latest        -> newest published GitHub Release       <- what .env defaults to
+#   X.Y.Z / X.Y   -> that release, for pinning EASY_HEADROOM_TAG
+#   main          -> tip of the main branch (may be ahead of any release)
+#   sha-<short>   -> every build, for exact forensics
+#
+# Cutting a release is therefore the whole publishing act: `gh release create v0.2.0`
+# creates the tag, fires this workflow, and moves `latest`. Pushing to main only moves
+# `main` and `sha-*`.
+#
+# One manual step was needed after the very first successful run: GHCR creates the package
+# as *private* even from a public repo, at
+# Packages -> easy-headroom -> Package settings -> Change visibility -> Public.
+# Making public packages selectable at all is itself an org-level toggle
+# (Organization settings -> Packages -> Package Creation -> Public).
 
 on:
   push:
@@ -14,6 +26,11 @@ on:
     paths:
       - 'easy-headroom/**'
       - '.github/workflows/publish-image.yml'
+  # Deliberately `release: published` rather than `push: tags:`. GitHub evaluates the
+  # `paths` filter above against a tag push too, where the pushed-commit list is empty,
+  # so a tag would silently never build. The release event has no such interaction.
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -38,9 +55,22 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/easy-headroom
+          # latest=false: don't let the action infer `latest` on its own, the raw rule
+          # below owns it and ties it strictly to releases.
+          flavor: latest=false
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+            type=raw,value=main,enable={{is_default_branch}}
             type=sha,format=short
+          # Set explicitly: inferred from the repo these come out as
+          # title=easy-headroom-docker (the repo, not this image), an empty description,
+          # and licenses=NOASSERTION.
+          labels: |
+            org.opencontainers.image.title=easy-headroom
+            org.opencontainers.image.description=RTK/TokenSave savings aggregator and single public entrypoint for a self-hosted Headroom bundle
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
 
       - uses: docker/build-push-action@v6
         with:
