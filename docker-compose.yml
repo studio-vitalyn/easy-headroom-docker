@@ -1,22 +1,45 @@
-# to rebuild headroom using latest:
-# docker compose build --no-cache easy-headroom-proxy easy-headroom-learner
-# docker compose up -d
+# to update everything (Headroom releases included):
+# docker compose pull && docker compose up -d
+#
+# Nothing is built locally anymore for the two Headroom services: they consume the
+# official upstream image as-is. Only the `easy-headroom` Node service still has a
+# `build:` section, kept for local development (docker compose up -d --build).
+
+# Official upstream image. `latest` is byte-for-byte the same digest as
+# `<version>-code-nonroot` — i.e. it already ships the [proxy,code] extras and already
+# runs as nonroot uid 1000/gid 1000 (verified against GHCR), which is exactly what the
+# hand-rolled Dockerfile that used to live in ./headroom produced. Its only quirk is
+# ENTRYPOINT ["headroom", "proxy"], which pins it to the proxy subcommand; overriding
+# `entrypoint: ["headroom"]` below is what lets the same image also run `learn`.
+# Pin here via .env (e.g. HEADROOM_IMAGE_TAG=0.35-code-nonroot) if an upstream release regresses.
+x-headroom-image: &headroom-image ghcr.io/headroomlabs-ai/headroom:${HEADROOM_IMAGE_TAG:-latest}
+
+# These used to be ENV lines in ./headroom/Dockerfile (now deleted). The upstream image
+# does not set them, so they have to be declared here — for both Headroom services.
+x-headroom-env: &headroom-env
+  HOME: /home/nonroot
+  TZ: ${TZ:-Europe/Paris}
+  HEADROOM_HOST: 0.0.0.0
+  HEADROOM_CODE_AWARE_ENABLED: "1"
+  HEADROOM_MEMORY_INJECTION_MODE: live_zone_tail
+  HEADROOM_CCR_TTL_SECONDS: "86400"
+  HEADROOM_SMART_CRUSHER_COMPACTION: "1"
+  HEADROOM_OUTPUT_HOLDOUT: "0.1"
+  HEADROOM_OUTPUT_SHAPER: "1"
 
 services:
   easy-headroom-proxy:
-    build:
-      context: ./headroom
-      dockerfile: Dockerfile
+    image: *headroom-image
+    # Strips the baked-in `proxy` subcommand so `command:` below picks it (see the anchor above).
+    entrypoint: ["headroom"]
     container_name: easy-headroom-proxy
     restart: unless-stopped
     command: ["proxy", "--host", "0.0.0.0", "--port", "8787", "--memory"]
     environment:
-      - HEADROOM_HOST=0.0.0.0
-      - HOME=/home/nonroot
+      <<: *headroom-env
       # Keep all Headroom read/write state on the named volume below.
-      - HEADROOM_WORKSPACE_DIR=/home/nonroot/.headroom
-      - HEADROOM_CONFIG_DIR=/home/nonroot/.headroom/config
-      - HEADROOM_OUTPUT_SHAPER=1
+      HEADROOM_WORKSPACE_DIR: /home/nonroot/.headroom
+      HEADROOM_CONFIG_DIR: /home/nonroot/.headroom/config
       # Gates this service's own /v1/* routes on the internal Compose network (it has no
       # published port, but any other container on the network could otherwise reach it
       # unauthenticated) via Headroom's own native check on the X-Headroom-Proxy-Token header
@@ -25,11 +48,12 @@ services:
       # Code via ANTHROPIC_CUSTOM_HEADERS, or the VS Code extension's local dashboard proxy — see
       # docker/CLAUDE.md). Also read by the rtk wrapper (mounted below) to authenticate its own
       # call to easy-headroom's /rtk/aggregate.
-      - HEADROOM_PROXY_TOKEN=${HEADROOM_PROXY_TOKEN:-}
+      HEADROOM_PROXY_TOKEN: ${HEADROOM_PROXY_TOKEN:-}
       # Read by the rtk wrapper (mounted below) to reach easy-headroom on the internal network.
-      - EASY_HEADROOM_PORT=${EASY_HEADROOM_PORT:-8787}
+      # The wrapper shells out to curl, which the upstream image ships (its own healthcheck uses it).
+      EASY_HEADROOM_PORT: ${EASY_HEADROOM_PORT:-8787}
       # Uncomment and configure if needed (or use a .env file with env_file)
-      # - OPENAI_TARGET_API_URL=https://api.x.ai
+      # OPENAI_TARGET_API_URL: https://api.x.ai
     # No "ports:" here: this service stays on the internal Docker network only.
     # easy-headroom (published on port 8787) is the one that exposes everything
     # publicly and proxies to this container for anything that isn't /rtk/*.
@@ -43,16 +67,17 @@ services:
 
   # The learning worker
   easy-headroom-learner:
-    build:
-      context: ./headroom
-      dockerfile: Dockerfile
+    image: *headroom-image
+    entrypoint: ["headroom"]
     container_name: easy-headroom-learner
     restart: unless-stopped
     command: ["learn", "--verbosity", "--apply"]
     environment:
-      - HEADROOM_HOST=0.0.0.0
-      - HEADROOM_OUTPUT_SHAPER=1
-      - TZ=Europe/Paris
+      <<: *headroom-env
+    # The upstream image's healthcheck curls :8787/readyz; the learner serves no HTTP
+    # and would sit permanently "unhealthy" otherwise.
+    healthcheck:
+      disable: true
     volumes:
       - ./headroom_data:/home/nonroot/.headroom
       - ./headroom_cache:/home/nonroot/.cache
@@ -60,6 +85,10 @@ services:
   # Only public entrypoint of the bundle: serves /rtk/* (RTK savings aggregation, formerly
   # rtk-ingest) and proxies everything else to easy-headroom-proxy (dashboard, compressed API, etc.).
   easy-headroom:
+    # Published to GHCR by .github/workflows/publish-image.yml on every push to main.
+    image: ghcr.io/studio-vitalyn/easy-headroom:${EASY_HEADROOM_TAG:-latest}
+    # Kept for local development only: docker compose up -d --build rebuilds from source
+    # and tags the result as the image above.
     build: ./easy-headroom
     container_name: easy-headroom
     restart: unless-stopped

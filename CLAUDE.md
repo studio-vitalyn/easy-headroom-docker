@@ -71,8 +71,29 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
 ## Components
 
 **`headroom` (service)**
-- Image based on the official Headroom Dockerfile
-  (`headroom-ai[proxy,code]`).
+- Runs the **official upstream image as-is** —
+  `ghcr.io/headroomlabs-ai/headroom:${HEADROOM_IMAGE_TAG:-latest}`. No
+  local Dockerfile, so updating is `docker compose pull && docker
+  compose up -d` rather than a `--no-cache` rebuild. Upstream's
+  `latest` is the same digest as `<version>-code-nonroot`: it already
+  ships the `[proxy,code]` extras, already runs as `nonroot` uid
+  1000/gid 1000 (so the `./headroom_data`/`./headroom_cache` bind
+  mounts need no `chown`), and already has `curl` — which is what
+  keeps the `rtk` wrapper below working without a custom layer.
+- Its `ENTRYPOINT` is `["headroom", "proxy"]`, which would pin every
+  container to the proxy subcommand. `docker-compose.yml` overrides
+  `entrypoint: ["headroom"]` on both services, so the *same* image
+  serves `proxy` (easy-headroom-proxy) and `learn`
+  (easy-headroom-learner) — this override is the only reason a
+  hand-rolled Dockerfile ever existed here. The learner also sets
+  `healthcheck: disable: true`, since the image's baked healthcheck
+  curls `:8787/readyz` and the learner serves no HTTP.
+- The `HEADROOM_*` tuning vars the old Dockerfile baked in
+  (`HEADROOM_CODE_AWARE_ENABLED`, `HEADROOM_MEMORY_INJECTION_MODE`,
+  `HEADROOM_CCR_TTL_SECONDS`, `HEADROOM_SMART_CRUSHER_COMPACTION`,
+  `HEADROOM_OUTPUT_HOLDOUT`, `HEADROOM_OUTPUT_SHAPER`, `TZ`, `HOME`)
+  now live in the `x-headroom-env` YAML anchor, shared by both
+  services. Upstream's image sets none of them.
 - Contains an `rtk` **wrapper** (a shell script, NOT the real RTK
   binary) mounted at the real binary's path, which:
   - responds to `--version` with a plausible static value,
@@ -91,6 +112,15 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
   actually runs the commands).
 
 **`easy-headroom` (service, Node.js — the rtk-ingest aggregator + reverse proxy)**
+- Published to `ghcr.io/studio-vitalyn/easy-headroom:latest` by
+  `.github/workflows/publish-image.yml` on every push to `main` that
+  touches `easy-headroom/**` (`GITHUB_TOKEN` + `packages: write`, no
+  secret to provision). `docker-compose.yml` declares both `image:` and
+  `build:`, so `docker compose pull` uses the published image while
+  `docker compose up -d --build easy-headroom` still rebuilds from
+  source during development. Built for `linux/amd64` only —
+  `better-sqlite3` goes through `node-gyp`, and an arm64 build would
+  run emulated under QEMU for no current benefit.
 - Compose service name is `easy-headroom` on purpose (this is the
   bundle's public-facing component); routes are
   namespaced under `/rtk/*` so unrelated future routes stay separate,
@@ -290,20 +320,24 @@ RTK's above.
 docker-easy-headroom/
 ├── docker-compose.yml
 ├── .env.example              (HEADROOM_PROXY_TOKEN=change-me)
-├── headroom/
-│   ├── Dockerfile
-│   └── rtk-wrapper.sh         (mounted at /usr/bin/rtk; actual file just named `rtk`)
+├── .github/workflows/
+│   └── publish-image.yml     (builds + pushes ghcr.io/studio-vitalyn/easy-headroom)
 ├── easy-headroom/            (the rtk-ingest aggregator, see Components)
 │   ├── Dockerfile
 │   ├── package.json
+│   ├── rtk                   (the wrapper shell script, mounted at /usr/bin/rtk)
 │   └── server.js
 └── README.md                  (deployment instructions)
 ```
 
+There is deliberately **no `headroom/` folder**: that service runs the
+upstream image directly (see Components above).
+
 ## What the README should explain to the end user
 
 1. `cp .env.example .env`, then set a real key.
-2. `docker compose up -d --build`.
+2. `docker compose pull && docker compose up -d` — same command for the
+   initial deploy and for every later update, nothing is built locally.
 3. Grab the exposed URL — a single port, `http://<host>:8787`, for
    both Headroom (dashboard, API proxy) and RTK ingestion (`/rtk/*`)
    — and the API key.

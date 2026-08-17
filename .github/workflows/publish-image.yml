@@ -1,0 +1,56 @@
+name: Publish easy-headroom image
+
+# Builds the Node service (the RTK/TokenSave aggregator + reverse proxy) and pushes it to
+# GHCR, so deployments can `docker compose pull` instead of building it locally.
+#
+# One manual step is needed after the very first successful run: GHCR creates the package
+# as *private* even from a public repo. Flip it at
+# Packages -> easy-headroom -> Package settings -> Change visibility -> Public,
+# otherwise `docker compose pull` fails with a 401 for anyone not `docker login`-ed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'easy-headroom/**'
+      - '.github/workflows/publish-image.yml'
+  workflow_dispatch:
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/easy-headroom
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./easy-headroom
+          # amd64 only on purpose: better-sqlite3 compiles through node-gyp, and an
+          # arm64 build would run under QEMU emulation for several minutes. Add
+          # linux/arm64 here the day an arm64 host actually needs it.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

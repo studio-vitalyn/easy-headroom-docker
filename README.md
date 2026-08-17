@@ -28,7 +28,7 @@ local Headroom proxy.
 
 1. `cp .env.example .env`, then set a real `HEADROOM_PROXY_TOKEN`
    (e.g. `openssl rand -hex 32`).
-2. `docker compose up -d --build`.
+2. `docker compose pull && docker compose up -d`.
 3. Grab the exposed URL — a single port, `http://<host>:8787` by
    default (`EASY_HEADROOM_PORT` in `.env`), serves both Headroom
    (dashboard, compressed API proxy) and RTK ingestion (`/rtk/*`).
@@ -36,6 +36,22 @@ local Headroom proxy.
    extension settings (`headroom.mode=remote`, `headroom.remoteUrl`,
    `headroom.proxyToken`). RTK stats reporting targets
    `headroom.remoteUrl/rtk/ingest` automatically.
+
+## Updating
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+Nothing is built locally: the two Headroom services run the official
+upstream image (`ghcr.io/headroomlabs-ai/headroom`) as-is, and the
+`easy-headroom` service is published to
+`ghcr.io/studio-vitalyn/easy-headroom`. Pin either one from `.env`
+(`HEADROOM_IMAGE_TAG`, `EASY_HEADROOM_TAG`) if you'd rather not track
+`latest`.
+
+To rebuild the `easy-headroom` service from source while hacking on it,
+`docker compose up -d --build easy-headroom` still works.
 
 See [CLAUDE.md](./CLAUDE.md) for the full design spec.
 
