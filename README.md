@@ -26,13 +26,21 @@ local Headroom proxy.
 
 ## Quick start
 
-1. `cp .env.example .env`, then set a real `HEADROOM_PROXY_TOKEN`
+No clone needed — the bundle is two files, `docker-compose.yml` and
+your own `.env`. See [INSTALL.md](./INSTALL.md) for the full walkthrough.
+
+1. Copy `docker-compose.yml` and `.env.example` (as `.env`) onto the
+   host, then set a real `HEADROOM_PROXY_TOKEN` in it
    (e.g. `openssl rand -hex 32`).
-2. `docker compose pull && docker compose up -d`.
-3. Grab the exposed URL — a single port, `http://<host>:8787` by
+2. `mkdir -p headroom_data headroom_cache && sudo chown -R 1000:1000
+   headroom_data headroom_cache` — the Headroom containers run as
+   nonroot uid 1000, and Docker would otherwise create those bind-mount
+   sources as `root:root`.
+3. `docker compose pull && docker compose up -d`.
+4. Grab the exposed URL — a single port, `http://<host>:8787` by
    default (`EASY_HEADROOM_PORT` in `.env`), serves both Headroom
    (dashboard, compressed API proxy) and RTK ingestion (`/rtk/*`).
-4. Give the URL and token to each host's `easy-headroom`
+5. Give the URL and token to each host's `easy-headroom`
    extension settings (`headroom.mode=remote`, `headroom.remoteUrl`,
    `headroom.proxyToken`). RTK stats reporting targets
    `headroom.remoteUrl/rtk/ingest` automatically.
@@ -66,12 +74,13 @@ EASY_HEADROOM_TAG=0.1
 ```
 
 To rebuild the `easy-headroom` service from source while hacking on it,
-`docker compose up -d --build easy-headroom` still works.
+clone the repo and add the dev overlay:
+`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`.
 
 ## Local tweaks
 
-Don't edit the tracked `docker-compose.yml` — the next `git pull` will
-refuse to merge over it. Put per-host changes in a
+Don't edit `docker-compose.yml` — re-fetching it (or `git pull`, from a
+clone) would wipe your changes. Put per-host changes in a
 `docker-compose.override.yml` next to it instead; Compose loads and
 merges it automatically, with no extra flag, and it's gitignored:
 
@@ -86,7 +95,8 @@ services:
 Anything that's already a variable (token, port, image tags, timezone)
 belongs in `.env` rather than an override.
 
-See [CLAUDE.md](./CLAUDE.md) for the full design spec.
+See [INSTALL.md](./INSTALL.md) for deployment details, and
+[CLAUDE.md](./CLAUDE.md) for the full design spec.
 
 ## Sponsor
 

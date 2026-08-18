@@ -1,0 +1,14 @@
+# Development overlay — not needed to install or run the bundle.
+#
+# The tracked docker-compose.yml is deliberately self-contained (no `build:`, no
+# repo-relative bind mounts) so a deployment host only needs that one file plus a
+# .env. This overlay adds back what you want when hacking on the sources in this
+# repo, and is only ever loaded when you ask for it explicitly:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# For per-host deployment tweaks use docker-compose.override.yml instead — Compose
+# picks that one up automatically and it's gitignored.
+services:
+  easy-headroom:
+    build: ./easy-headroom

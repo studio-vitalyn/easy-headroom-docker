@@ -77,9 +77,13 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
   compose up -d` rather than a `--no-cache` rebuild. Upstream's
   `latest` is the same digest as `<version>-code-nonroot`: it already
   ships the `[proxy,code]` extras, already runs as `nonroot` uid
-  1000/gid 1000 (so the `./headroom_data`/`./headroom_cache` bind
-  mounts need no `chown`), and already has `curl` — which is what
-  keeps the `rtk` wrapper below working without a custom layer.
+  1000/gid 1000, and already has `curl` — which is what keeps the
+  `rtk` wrapper below working without a custom layer. Running as uid
+  1000 does mean `./headroom_data`/`./headroom_cache` must be owned by
+  `1000:1000`: Docker creates a missing bind-mount source as
+  `root:root`, and Headroom then can't write its state. `INSTALL.md`
+  has the fresh-host `mkdir -p` + `chown` step; existing deployments
+  predate the issue because their directories already exist.
 - Its `ENTRYPOINT` is `["headroom", "proxy"]`, which would pin every
   container to the proxy subcommand. `docker-compose.yml` overrides
   `entrypoint: ["headroom"]` on both services, so the *same* image
@@ -95,7 +99,17 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
   now live in the `x-headroom-env` YAML anchor, shared by both
   services. Upstream's image sets none of them.
 - Contains an `rtk` **wrapper** (a shell script, NOT the real RTK
-  binary) mounted at the real binary's path, which:
+  binary) mounted at the real binary's path. It is **inlined into
+  `docker-compose.yml` as a Compose config** (`configs: rtk-wrapper:
+  content:`, mounted `target: /usr/bin/rtk, mode: 0555`) rather than
+  bind-mounted from `easy-headroom/rtk` — a bind mount would have made
+  the compose file useless on its own (Docker would silently create an
+  empty *directory* at that path and shadow nothing useful), and
+  keeping the file self-contained is what lets an installer copy
+  `docker-compose.yml` + `.env` and nothing else (see `INSTALL.md`).
+  `easy-headroom/rtk` stays in the repo as the editable source of
+  truth; the two must be kept in sync by hand. `content:` requires
+  Docker Compose >= 2.23.1. The wrapper:
   - responds to `--version` with a plausible static value,
   - on `gain [...]`, `curl`s `easy-headroom:$EASY_HEADROOM_PORT/rtk/aggregate`
     (same internal Compose network; `EASY_HEADROOM_PORT` is passed into
@@ -132,10 +146,15 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
     empty description, and `NOASSERTION`.
     `org.opencontainers.image.source` is inferred correctly and is what
     links the GHCR package back to this repo.
-- `docker-compose.yml` declares both `image:` and
-  `build:`, so `docker compose pull` uses the published image while
-  `docker compose up -d --build easy-headroom` still rebuilds from
-  source during development. Built for `linux/amd64` only —
+- `docker-compose.yml` declares **only** `image:`, never `build:` —
+  a `build: ./easy-headroom` context doesn't exist on a host that
+  copied just the compose file, and a bare `docker compose up -d`
+  there would try to build and fail. The build section lives in a
+  tracked `docker-compose.dev.yml` overlay, loaded explicitly:
+  `docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+  -d --build`. (`docker-compose.override.yml` stays reserved for
+  per-host deployment tweaks, since Compose loads it implicitly.)
+  Built for `linux/amd64` only —
   `better-sqlite3` goes through `node-gyp`, and an arm64 build would
   run emulated under QEMU for no current benefit.
 - Compose service name is `easy-headroom` on purpose (this is the
@@ -335,9 +354,11 @@ RTK's above.
 
 ```
 docker-easy-headroom/
-├── docker-compose.yml
+├── docker-compose.yml        (self-contained: no build:, no repo-relative mounts)
+├── docker-compose.dev.yml    (tracked, explicit -f: adds build: for hacking on the sources)
 ├── docker-compose.override.yml  (per-host, gitignored, never committed — see below)
 ├── .env.example              (HEADROOM_PROXY_TOKEN=change-me)
+├── INSTALL.md                (end-user install: copy 2 files, done)
 ├── .github/workflows/
 │   └── publish-image.yml     (builds + pushes ghcr.io/studio-vitalyn/easy-headroom)
 ├── easy-headroom/            (the rtk-ingest aggregator, see Components)
@@ -351,15 +372,23 @@ docker-easy-headroom/
 There is deliberately **no `headroom/` folder**: that service runs the
 upstream image directly (see Components above).
 
+**A deployment host needs exactly two files**: `docker-compose.yml`
+(copied verbatim) and its own `.env`. Nothing else in this repo is read
+at runtime — every image is pulled, and the one file that used to be
+bind-mounted (`easy-headroom/rtk`) is now inlined into the compose file
+as a config. `INSTALL.md` documents that install path; keep it true
+whenever the compose file changes.
+
 **Never edit the tracked `docker-compose.yml` on a deployment host** —
-`git pull` then refuses to merge over the local changes. Per-host
+re-fetching it (or `git pull`, from a clone) wipes the local changes. Per-host
 tweaks go in a gitignored `docker-compose.override.yml`, which Compose
 merges automatically with no extra flag; anything already parameterised
 (token, port, image tags, `TZ`) goes in `.env` instead.
 
-## What the README should explain to the end user
+## What the README / INSTALL.md should explain to the end user
 
-1. `cp .env.example .env`, then set a real key.
+1. Copy `docker-compose.yml` + `.env.example` (as `.env`) onto the
+   host — no clone — then set a real key.
 2. `docker compose pull && docker compose up -d` — same command for the
    initial deploy and for every later update, nothing is built locally.
 3. Grab the exposed URL — a single port, `http://<host>:8787`, for

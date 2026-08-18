@@ -59,9 +59,15 @@ services:
     # publicly and proxies to this container for anything that isn't /rtk/*.
     expose:
       - "8787"
+    # The `rtk` wrapper, inlined as a Compose config (see the `configs:` block at the
+    # bottom) rather than bind-mounted from the repo — that's what makes this file
+    # self-contained: an installer copies docker-compose.yml + .env and nothing else.
+    configs:
+      - source: rtk-wrapper
+        target: /usr/bin/rtk
+        mode: 0555
     volumes:
       # Keep local folders for data and cache
-      - ./easy-headroom/rtk:/usr/bin/rtk
       - ./headroom_data:/home/nonroot/.headroom
       - ./headroom_cache:/home/nonroot/.cache
 
@@ -86,10 +92,10 @@ services:
   # rtk-ingest) and proxies everything else to easy-headroom-proxy (dashboard, compressed API, etc.).
   easy-headroom:
     # Published to GHCR by .github/workflows/publish-image.yml on every push to main.
+    # No `build:` here on purpose — it would reference ./easy-headroom, which an installer
+    # who copied only this file doesn't have. To rebuild from source while hacking on it,
+    # add -f docker-compose.dev.yml (see that file).
     image: ghcr.io/studio-vitalyn/easy-headroom:${EASY_HEADROOM_TAG:-latest}
-    # Kept for local development only: docker compose up -d --build rebuilds from source
-    # and tags the result as the image above.
-    build: ./easy-headroom
     container_name: easy-headroom
     restart: unless-stopped
     environment:
@@ -104,3 +110,32 @@ services:
       - "${EASY_HEADROOM_PORT:-8787}:${EASY_HEADROOM_PORT:-8787}"
     depends_on:
       - easy-headroom-proxy
+
+# Inlined verbatim from easy-headroom/rtk (kept in the repo as the editable source of
+# truth). Mounted at /usr/bin/rtk in easy-headroom-proxy: a stub that answers Headroom's
+# only real call, `rtk gain`, with the bundle's aggregated cross-host RTK savings. Real
+# RTK is never installed there — it has to stay co-located with the shell it wraps.
+# `$$` escapes are Compose's, so the shell (not Compose) expands those variables.
+# Requires Docker Compose >= 2.23.1 for `content:`.
+configs:
+  rtk-wrapper:
+    content: |
+      #!/bin/sh
+
+      case "$$1" in
+
+        --version)
+          echo "rtk 0.99.0 (headroom-aggregate-proxy)"
+          ;;
+        gain)
+          port="$${EASY_HEADROOM_PORT:-8787}"
+          if [ -n "$$HEADROOM_PROXY_TOKEN" ]; then
+            curl -sf -H "X-Headroom-Proxy-Token: $$HEADROOM_PROXY_TOKEN" "http://easy-headroom:$$port/rtk/aggregate" 2>/dev/null
+          else
+            curl -sf "http://easy-headroom:$$port/rtk/aggregate" 2>/dev/null
+          fi
+          ;;
+        *)
+          exit 0
+          ;;
+      esac

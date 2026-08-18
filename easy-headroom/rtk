@@ -1,4 +1,9 @@
 #!/bin/sh
+# Source of truth for the `rtk` stub mounted into easy-headroom-proxy.
+# It is NOT bind-mounted at runtime: docker-compose.yml inlines a copy under
+# `configs: rtk-wrapper: content:` so the compose file stays self-contained
+# (see INSTALL.md). Edit here, then mirror the change into docker-compose.yml,
+# escaping every `$` as `$$` so Compose leaves it for the shell.
 
 case "$1" in
 
