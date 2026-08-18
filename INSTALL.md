@@ -19,6 +19,12 @@ no other file from this repo is read at runtime.
   in that version). Check with `docker compose version`.
 - One free TCP port on the host (`8787` by default).
 
+`docker compose up` prints ``WARN[0000] config `uid`, `gid` and `mode`
+are not supported, they will be ignored``. It is harmless and expected:
+those fields are Swarm-only in Compose's schema, but the `mode: 0555` on
+the inlined `rtk` wrapper is applied all the same (verified on Compose
+2.26.1). Nothing to do.
+
 ## 1. Fetch the two files
 
 ```sh

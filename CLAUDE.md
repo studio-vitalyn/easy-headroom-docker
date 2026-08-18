@@ -109,7 +109,30 @@ bundle, and `easy-headroom-proxy` never needs direct network exposure.
   `docker-compose.yml` + `.env` and nothing else (see `INSTALL.md`).
   `easy-headroom/rtk` stays in the repo as the editable source of
   truth; the two must be kept in sync by hand. `content:` requires
-  Docker Compose >= 2.23.1. The wrapper:
+  Docker Compose >= 2.23.1.
+
+  `docker compose up` prints ``WARN[0000] config `uid`, `gid` and
+  `mode` are not supported, they will be ignored``. **False alarm —
+  never "fix" it by dropping `mode: 0555`.** Those three fields are
+  Swarm-only in Compose's schema, hence the blanket warning, but the
+  mode *is* applied to inline `content:` configs. Verified 2026-08-18
+  on **Compose 2.26.1** against a running stack: inside
+  `easy-headroom-proxy`, `ls -l /usr/bin/rtk` returns
+  `-r-xr-xr-x 1 root root 427` (427 bytes = the inlined `content:`
+  byte-for-byte, and root-owned = Compose's generated temp file, not a
+  bind mount), and `rtk gain` run as the image's nonroot user returns
+  the aggregate JSON.
+
+  Should a future Compose version really start ignoring it, the symptom
+  is `rtk gain` failing with EACCES (wrapper mounted non-executable),
+  and the fix is *not* to touch `mode:` — it is to stop shipping the
+  wrapper as a config and have the `easy-headroom-proxy` entrypoint
+  write it to a writable dir on `PATH` instead
+  (`sh -c 'cat > /tmp/bin/rtk <<EOF ... EOF; chmod 0555 …;
+  export PATH=/tmp/bin:$PATH; exec headroom "$@"' --`), which also
+  drops the >= 2.23.1 requirement.
+
+  The wrapper:
   - responds to `--version` with a plausible static value,
   - on `gain [...]`, `curl`s `easy-headroom:$EASY_HEADROOM_PORT/rtk/aggregate`
     (same internal Compose network; `EASY_HEADROOM_PORT` is passed into
